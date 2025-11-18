@@ -44,64 +44,110 @@
 #
 # =====================================================================
 
+# data_utils.py
+# =====================================================================
+# Modulo: Funzioni di preparazione e manipolazione dati
+# =====================================================================
+
 import pandas as pd
 import numpy as np
 from config import COLUMN_NAMES
 
 def create_lagged_features(df: pd.DataFrame, n_lags: int, include_date: bool = False) -> pd.DataFrame:
     """
-    Crea feature ritardate (lag) per la colonna target.
+    Crea feature ritardate (lag) solo per la colonna target.
+    Usato da: Random Forest, Gradient Boosting, MLP, ARIMAX.
+    
+    Args:
+        df (pd.DataFrame): Dataset originale.
+        n_lags (int): Numero di passi temporali indietro da considerare.
+        include_date (bool): Se mantenere la colonna data nel dataframe risultante.
+        
+    Returns:
+        pd.DataFrame: Dataset con le colonne lag_1, lag_2, ..., lag_n.
     """
     df_lagged = df.copy()
     target = COLUMN_NAMES['TARGET']
     
-    # Creazione lag
+    # Creazione colonne lag
     for t in range(1, n_lags + 1):
         df_lagged[f'lag_{t}'] = df_lagged[target].shift(t)
     
-    # Rimuove righe con NaN generate dallo shift
+    # Rimuove le righe iniziali che contengono NaN a causa dello shift
     df_lagged = df_lagged.dropna()
     
-    # Reset index per mantenere le date allineate se necessario
+    # Gestione colonna data (se presente e richiesta)
     if not include_date and COLUMN_NAMES['DATE'] in df_lagged.columns:
-        # Se la data è l'indice, la lasciamo lì, altrimenti la escludiamo se richiesto
+        # La data viene mantenuta se serve per i plot, altrimenti ignorata dalle feature X
         pass
         
     return df_lagged
 
+
 def create_lagged_features_multivariate(df: pd.DataFrame, n_lags: int, target_col: str, exog_cols: list) -> pd.DataFrame:
     """
-    Crea feature ritardate per target e variabili esogene (per LSTM/VARMAX).
+    Crea feature ritardate per target E variabili esogene.
+    Usato da: LSTM (che richiede la storia completa di tutte le feature).
+    
+    Args:
+        df (pd.DataFrame): Dataset.
+        n_lags (int): Numero di lag.
+        target_col (str): Nome colonna target.
+        exog_cols (list): Lista nomi colonne esogene.
+        
+    Returns:
+        pd.DataFrame: Dataset con lag per tutte le variabili specificate.
     """
     df_copy = df.copy()
     cols_to_lag = [target_col] + exog_cols
     
+    # Crea lag per ogni colonna specificata (target + meteo)
     for col in cols_to_lag:
         for t in range(1, n_lags + 1):
             df_copy[f'{col}_lag_{t}'] = df_copy[col].shift(t)
             
     return df_copy.dropna()
 
+
 def prepare_varmax_data(df: pd.DataFrame, rolling_window: int, ema_alpha: float):
     """
-    Prepara i dati per VARMAX: smoothing e differenziazione.
+    Prepara i dati specificamente per il modello VARMAX.
+    Esegue smoothing e differenziazione per rendere la serie stazionaria.
+    
+    CORREZIONE IMPORTANTE:
+    Include 'Temperatura' come variabile ENDOGENA insieme al Target.
+    Questo risolve l'errore "Only gave one variable to VAR".
+    
+    Args:
+        df (pd.DataFrame): Dataset completo.
+        rolling_window (int): (Non usato in questa versione con EMA, mantenuto per compatibilità).
+        ema_alpha (float): Fattore di smoothing esponenziale.
+        
+    Returns:
+        tuple: (endog_data, exog_data) pronte per il fitting.
     """
-    # Selezione colonne
+    # Selezione colonne dai config
     target = COLUMN_NAMES['TARGET']
     temp = COLUMN_NAMES['TEMPERATURE']
     humid = COLUMN_NAMES['HUMIDITY']
     
+    # Copia del dataset limitata alle colonne di interesse
     data = df[[target, temp, humid]].copy()
     
-    # Smoothing (Media mobile esponenziale o rolling)
+    # 1. Smoothing: riduce il rumore degli insetti (spikes improvvisi)
+    # Usiamo Exponential Moving Average
     data_smooth = data.ewm(alpha=ema_alpha).mean()
     
-    # Differenziazione per stazionarietà (semplice differenza primo ordine)
+    # 2. Differenziazione: rimuove il trend e la stagionalità di base (Stazionarietà)
     data_diff = data_smooth.diff().dropna()
     
-    # Separazione endogene (Target) ed esogene (Temp, Humid)
-    # Nota: VARMAX può gestire più endogene, qui semplifichiamo
-    endog = data_diff[[target]]
-    exog = data_diff[[temp, humid]]
+    # 3. Definizione variabili Endogene ed Esogene
+    # VARMAX richiede un vettore di variabili endogene (>= 2 variabili per VAR).
+    # Modelliamo Insetti e Temperatura come sistema accoppiato (Endogene).
+    # L'Umidità rimane come variabile esterna (Esogena).
+    
+    endog = data_diff[[target, temp]]  # <-- Ora contiene 2 colonne: Insetti e Temp
+    exog = data_diff[[humid]]          # <-- Umidità
     
     return endog, exog
+
