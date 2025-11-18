@@ -97,47 +97,46 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Importazioni locali
+# Importazioni dai moduli locali
 from config import (
     STREAMLIT_CONFIG, DATA_PATH, COLUMN_NAMES, 
-    TAB_TITLES, AVAILABLE_MODELS, UI_TEXTS, PLOT_CONFIG
+    TAB_TITLES, AVAILABLE_MODELS, UI_TEXTS
 )
 from models import create_model
 
-# Configurazione Pagina
+# --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(**STREAMLIT_CONFIG)
 
-# --- FUNZIONI DI CARICAMENTO ---
+# --- FUNZIONI UTILITY ---
 @st.cache_data
 def load_data():
+    """Carica il dataset e converte le date."""
     try:
-        # Caricamento dataset
         df = pd.read_csv(DATA_PATH)
-        
-        # Conversione data
+        # Conversione colonna data
         df[COLUMN_NAMES['DATE']] = pd.to_datetime(df[COLUMN_NAMES['DATE']])
         df = df.sort_values(by=COLUMN_NAMES['DATE'])
-        
         return df
     except FileNotFoundError:
-        st.error(f"File dati non trovato in: {DATA_PATH}. Assicurati di aver caricato 'cicalino_agg.csv'.")
+        st.error(f"❌ File dati non trovato in: {DATA_PATH}. Verifica che 'cicalino_agg.csv' sia nella cartella.")
         return pd.DataFrame()
 
-# --- MAIN APP ---
+# --- MAIN APPLICATION ---
 def main():
     st.title(UI_TEXTS['main_title'])
     st.caption(UI_TEXTS['main_caption'])
 
-    # Caricamento Dati
+    # 1. Caricamento Dati
     df = load_data()
     if df.empty:
-        return
+        st.stop() # Ferma l'app se non ci sono dati
 
-    # Sidebar - Filtri
-    st.sidebar.header("Filtri")
+    # 2. Sidebar e Filtri
+    st.sidebar.header("Filtri Temporali")
     min_date = df[COLUMN_NAMES['DATE']].min()
     max_date = df[COLUMN_NAMES['DATE']].max()
     
+    # Widget selezione date
     date_range = st.sidebar.date_input(
         UI_TEXTS['date_input_label'],
         value=(min_date, max_date),
@@ -145,14 +144,15 @@ def main():
         max_value=max_date
     )
 
-    # Filtro dati in base alla data
-    if len(date_range) == 2:
-        mask = (df[COLUMN_NAMES['DATE']].dt.date >= date_range[0]) & (df[COLUMN_NAMES['DATE']].dt.date <= date_range[1])
+    # Applicazione filtro
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_d, end_d = date_range
+        mask = (df[COLUMN_NAMES['DATE']].dt.date >= start_d) & (df[COLUMN_NAMES['DATE']].dt.date <= end_d)
         df_filtered = df.loc[mask]
     else:
         df_filtered = df
 
-    # Tabs
+    # 3. Creazione Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         TAB_TITLES['data'], 
         TAB_TITLES['line'], 
@@ -160,103 +160,136 @@ def main():
         TAB_TITLES['models']
     ])
 
-    # TAB 1: Dati
+    # --- TAB 1: DATASET ---
     with tab1:
+        st.markdown("### 📄 Visualizzazione Dati")
         st.dataframe(df_filtered, use_container_width=True)
-        st.info(f"Righe totali: {len(df_filtered)}")
+        st.info(f"Righe totali nel periodo selezionato: **{len(df_filtered)}**")
 
-    # TAB 2: Line Plot
+    # --- TAB 2: GRAFICI LINEARI ---
     with tab2:
-        st.subheader("Andamento Temporale")
+        st.markdown("### 📈 Andamento nel Tempo")
+        
+        # Grafico Target (Insetti)
         fig = px.line(df_filtered, x=COLUMN_NAMES['DATE'], y=COLUMN_NAMES['TARGET'], 
-                      title="Target nel tempo", template="plotly_white")
+                      title="Conteggio Insetti (Target)", template="plotly_white")
+        fig.update_traces(line_color='#FF4B4B') # Rosso Streamlit
         st.plotly_chart(fig, use_container_width=True)
         
-        # Meteo
+        st.divider()
+        
+        # Grafici Meteo (affiancati)
         col_a, col_b = st.columns(2)
         with col_a:
             st.plotly_chart(px.line(df_filtered, x=COLUMN_NAMES['DATE'], y=COLUMN_NAMES['TEMPERATURE'], 
-                                    title="Temperatura", color_discrete_sequence=['orange']), use_container_width=True)
+                                    title="Temperatura (°C)", color_discrete_sequence=['orange']), use_container_width=True)
         with col_b:
             st.plotly_chart(px.line(df_filtered, x=COLUMN_NAMES['DATE'], y=COLUMN_NAMES['HUMIDITY'], 
-                                    title="Umidità", color_discrete_sequence=['cyan']), use_container_width=True)
+                                    title="Umidità (%)", color_discrete_sequence=['cyan']), use_container_width=True)
 
-    # TAB 3: Distribuzioni
+    # --- TAB 3: DISTRIBUZIONI ---
     with tab3:
-        st.subheader("Distribuzione Variabili")
-        fig_hist = px.histogram(df_filtered, x=COLUMN_NAMES['TARGET'], nbins=30, title="Istogramma Target")
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.markdown("### 📊 Distribuzione dei Valori")
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_hist = px.histogram(df_filtered, x=COLUMN_NAMES['TARGET'], nbins=30, 
+                                    title="Distribuzione Conteggi Insetti", color_discrete_sequence=['#FF4B4B'])
+            st.plotly_chart(fig_hist, use_container_width=True)
+        with col2:
+             fig_box = px.box(df_filtered, y=COLUMN_NAMES['TARGET'], title="Boxplot Insetti")
+             st.plotly_chart(fig_box, use_container_width=True)
 
-    # TAB 4: Modelli
+    # --- TAB 4: MODELLI & PREDIZIONI ---
     with tab4:
-        st.subheader("Forecasting & Analisi")
+        st.markdown("### 🤖 Machine Learning & Forecasting")
+        st.info("Nota: I modelli Deep Learning (MLP/LSTM) richiedono più tempo per l'addestramento.")
         
-        col_model, col_btn = st.columns([3, 1])
-        with col_model:
-            selected_model = st.selectbox(UI_TEXTS['model_select_label'], AVAILABLE_MODELS)
+        # Selezione Modello
+        col_sel, col_btn = st.columns([3, 1])
+        with col_sel:
+            selected_model_name = st.selectbox(UI_TEXTS['model_select_label'], AVAILABLE_MODELS)
         
         with col_btn:
-            st.write("") # Spacer
-            st.write("") 
-            run_btn = st.button(UI_TEXTS['run_button_label'], type="primary")
+            st.write("") # Spaziatura verticale
+            st.write("")
+            run_btn = st.button(UI_TEXTS['run_button_label'], type="primary", use_container_width=True)
 
+        # Logica di Esecuzione
         if run_btn:
-            with st.spinner(f"Addestramento {selected_model} in corso..."):
+            with st.spinner(f"Addestramento modello **{selected_model_name}** in corso... attendere prego."):
                 try:
-                    # Istanzia il modello
-                    model_instance = create_model(selected_model)
+                    # 1. Creazione istanza modello
+                    model = create_model(selected_model_name)
                     
-                    # Training e valutazione
-                    # Nota: train_and_evaluate restituisce (model, metrics_dict)
-                    _, metrics = model_instance.train_and_evaluate(df_filtered)
+                    # 2. Training e Valutazione
+                    # Ritorna (trained_model, metrics_dict)
+                    _, metrics = model.train_and_evaluate(df_filtered)
                     
                     st.success(UI_TEXTS['success_message'])
                     
-                    # Visualizzazione Metriche
-                    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-                    m_col1.metric("Train RMSE", f"{metrics['train']['rmse']:.2f}")
-                    m_col2.metric("Test RMSE", f"{metrics['test']['rmse']:.2f}")
-                    m_col3.metric("Train MAE", f"{metrics['train']['mae']:.2f}")
-                    m_col4.metric("Test MAE", f"{metrics['test']['mae']:.2f}")
+                    # 3. Visualizzazione KPI Metriche
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Train RMSE", f"{metrics['train']['rmse']:.2f}")
+                    m2.metric("Test RMSE", f"{metrics['test']['rmse']:.2f}", help="Errore quadratico medio su dati mai visti")
+                    m3.metric("Train MAE", f"{metrics['train']['mae']:.2f}")
+                    m4.metric("Test MAE", f"{metrics['test']['mae']:.2f}", help="Errore medio assoluto su dati mai visti")
                     
-                    # Plot Predizioni vs Reale (Test Set)
+                    st.divider()
+
+                    # 4. Grafico Predizioni vs Realtà (Test Set)
                     st.subheader("Risultati sul Test Set")
                     
-                    # Recuperiamo i dati per il plot
+                    # Recupero dati per il plot
                     y_test = metrics['y_test']
                     y_pred = metrics['y_test_pred']
                     
-                    # Se ci sono indici temporali nel dizionario metrics (MLP/LSTM li mettono), usiamoli
-                    if 'idx_test' in metrics:
+                    # Gestione asse X (date o indice numerico)
+                    if 'idx_test' in metrics and metrics['idx_test'] is not None:
                         x_axis = metrics['idx_test']
                     else:
-                        # Fallback generico se l'indice non è passato esplicitamente
-                        x_axis = range(len(y_test))
+                        # CORREZIONE QUI: list() attorno a range()
+                        x_axis = list(range(len(y_test)))
 
                     fig_res = go.Figure()
-                    fig_res.add_trace(go.Scatter(x=x_axis, y=y_test, mode='lines', name='Reale'))
-                    fig_res.add_trace(go.Scatter(x=x_axis, y=y_pred, mode='lines', name='Predetto', line=dict(dash='dot')))
+                    fig_res.add_trace(go.Scatter(x=x_axis, y=y_test, mode='lines', name='Dato Reale (Test)', line=dict(color='gray')))
+                    fig_res.add_trace(go.Scatter(x=x_axis, y=y_pred, mode='lines', name='Predizione Modello', line=dict(color='red', dash='dot')))
                     
-                    fig_res.update_layout(title=f"Predizione {selected_model}", height=400)
+                    fig_res.update_layout(
+                        title=f"Performance: {selected_model_name}", 
+                        xaxis_title="Data" if 'idx_test' in metrics else "Step Temporali", 
+                        yaxis_title="Numero Insetti",
+                        height=450
+                    )
                     st.plotly_chart(fig_res, use_container_width=True)
 
-                    # Se c'è la history (NN), mostriamola
+                    # 5. Grafico Loss (solo per Neural Networks)
                     if 'history' in metrics and metrics['history'] is not None:
-                        st.subheader("Loss durante il training")
-                        loss = metrics['history'].history['loss']
-                        val_loss = metrics['history'].history['val_loss']
+                        st.subheader("Curve di Apprendimento (Loss)")
+                        hist = metrics['history'].history
+                        
                         fig_loss = go.Figure()
-                        fig_loss.add_trace(go.Scatter(y=loss, name='Train Loss'))
-                        fig_loss.add_trace(go.Scatter(y=val_loss, name='Val Loss'))
+                        fig_loss.add_trace(go.Scatter(y=hist['loss'], name='Training Loss'))
+                        if 'val_loss' in hist:
+                            fig_loss.add_trace(go.Scatter(y=hist['val_loss'], name='Validation Loss'))
+                        
+                        fig_loss.update_layout(title="Andamento Loss durante le epoche", xaxis_title="Epoca", yaxis_title="MSE")
                         st.plotly_chart(fig_loss, use_container_width=True)
 
+                # GESTIONE ERRORI SPECIFICI
                 except ImportError as e:
-                    st.error(f"Errore libreria mancante: {e}")
                     if "TensorFlow" in str(e):
-                        st.warning("Suggerimento: Assicurati che tensorflow-cpu sia nel requirements.txt")
+                        st.error("❌ Errore: TensorFlow non è disponibile.")
+                        st.warning("Assicurati che requirements.txt contenga `tensorflow-cpu`.")
+                    else:
+                        st.error(f"Errore di importazione: {e}")
+                
+                except ValueError as e:
+                    st.error(f"Errore nei dati o parametri: {e}")
+                
                 except Exception as e:
-                    st.error(f"Errore durante l'esecuzione: {e}")
-                    st.exception(e)
+                    st.error(f"Si è verificato un errore imprevisto: {e}")
+                    with st.expander("Dettagli errore tecnico"):
+                        st.exception(e)
 
 if __name__ == "__main__":
     main()
